@@ -1,4 +1,4 @@
-import gzip
+import gzip, sys
 
 from scrapy.downloadermiddlewares.httpcompression import HttpCompressionMiddleware
 

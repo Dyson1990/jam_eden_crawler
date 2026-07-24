@@ -5,7 +5,8 @@ import sqlite3
 from datetime import datetime
 from urllib.parse import urlparse
 
-import httpx
+import scrapy
+from twisted.internet import defer
 
 from eden_crawler.items import Asset
 
@@ -31,7 +32,6 @@ class SQLitePipeline:
         self.conn.close()
 
     def _ensure_table(self, fields):
-        """Create table on first item if not exists."""
         column_defs = ["insert_time TEXT"] + [f"{f} TEXT" for f in fields]
         self.cursor.execute(
             f"CREATE TABLE IF NOT EXISTS {self.table_name} (id INTEGER PRIMARY KEY AUTOINCREMENT, {', '.join(column_defs)})"
@@ -39,7 +39,6 @@ class SQLitePipeline:
         self.conn.commit()
 
     def _sync_columns(self, fields):
-        """Add new columns that appear in later items."""
         self.cursor.execute(f"PRAGMA table_info({self.table_name})")
         existing = {row[1] for row in self.cursor.fetchall()}
         for f in fields:
@@ -50,7 +49,6 @@ class SQLitePipeline:
         self.conn.commit()
 
     def _guess_ext(self, content_type, url):
-        """Infer file extension from Content-Type or URL path."""
         ct = (content_type or "").lower()
         for prefix, ext in [
             ("image/jpeg", ".jpg"), ("image/jpg", ".jpg"),
@@ -63,41 +61,52 @@ class SQLitePipeline:
         _, ext = os.path.splitext(urlparse(url).path)
         return ext or ""
 
-    def _process_assets(self, item):
-        """Download Asset values and replace in-place."""
+    @defer.inlineCallbacks
+    def _download_assets(self, item):
+        """Download all Asset values via Scrapy's downloader, replace in-place."""
+        pairs = []  # (key, Asset, Deferred)
+
         for key in list(item.keys()):
             val = item.get(key)
             if not isinstance(val, Asset):
                 continue
+            headers = {"Referer": val.referer} if val.referer else None
+            request = scrapy.Request(val.url, method="GET", headers=headers,
+                                     dont_filter=True)
+            pairs.append((key, val, self._crawler.engine.download(request)))
+
+        if not pairs:
+            return item
+
+        results = yield defer.DeferredList(
+            [d for _, _, d in pairs], consumeErrors=True)
+
+        for (key, val, _), (ok, response) in zip(pairs, results):
+            if not ok:
+                item[key] = None
+                continue
             try:
-                headers = {
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    ),
-                }
-                if val.referer:
-                    headers["Referer"] = val.referer
-                resp = httpx.get(val.url, headers=headers, follow_redirects=True)
-                resp.raise_for_status()
                 if val.type == "file":
                     dir_path = os.path.join(self._asset_dir, self.table_name)
                     os.makedirs(dir_path, exist_ok=True)
-                    ext = self._guess_ext(resp.headers.get("content-type"), val.url)
+                    ct = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore")
+                    ext = self._guess_ext(ct, val.url)
                     fname = hashlib.md5(val.url.encode()).hexdigest() + ext
                     filepath = os.path.join(dir_path, fname)
                     if not os.path.exists(filepath):
                         with open(filepath, "wb") as f:
-                            f.write(resp.content)
+                            f.write(response.body)
                     item[key] = filepath
                 else:
-                    item[key] = resp.content
+                    item[key] = response.body
             except Exception:
                 item[key] = None
 
+        return item
+
+    @defer.inlineCallbacks
     def process_item(self, item):
-        self._process_assets(item)
+        item = yield self._download_assets(item)
 
         fields = list(item.fields.keys())
         self._ensure_table(fields)
