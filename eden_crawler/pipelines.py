@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import sqlite3
 from datetime import datetime
@@ -18,6 +19,8 @@ class SQLitePipeline:
 
     def open_spider(self):
         spider = self._crawler.spider
+        if spider.settings.getbool("LOG_QUIET", False):
+            logging.getLogger("scrapy").setLevel(logging.WARNING)
         self.conn = sqlite3.connect("data.db")
         self.cursor = self.conn.cursor()
         spider_file = spider.__class__.__module__.split(".")[-1]
@@ -67,7 +70,16 @@ class SQLitePipeline:
             if not isinstance(val, Asset):
                 continue
             try:
-                resp = httpx.get(val.url, follow_redirects=True)
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                }
+                if val.referer:
+                    headers["Referer"] = val.referer
+                resp = httpx.get(val.url, headers=headers, follow_redirects=True)
                 resp.raise_for_status()
                 if val.type == "file":
                     dir_path = os.path.join(self._asset_dir, self.table_name)

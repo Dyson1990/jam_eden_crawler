@@ -35,4 +35,8 @@ elif HTTP_BACKEND is None:
     }
 
 LOG_LEVEL = "INFO"
+
+# Set True to suppress Scrapy's verbose telemetry/engine output
+LOG_QUIET = False
+
 ASSET_DIR = "downloads"
