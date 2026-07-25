@@ -66,7 +66,7 @@ class CarSpider(scrapy.Spider):
             item["name"] = brand_name
             item["url"] = brand_url
             if brand_logo:
-                item["logo"] = Asset(brand_logo, type="file")
+                item["logo"] = Asset(brand_logo, typ="blob")
             item["meta"] = json.dumps({"source": "brand_page"}, ensure_ascii=False)
             yield item
 
@@ -116,7 +116,7 @@ class CarSpider(scrapy.Spider):
             item["parent_name"] = brand_name
             item["url"] = series_url
             if series_image:
-                item["image"] = Asset(series_image, type="file")
+                item["image"] = Asset(series_image, typ="blob")
             item["meta"] = json.dumps({"brand": brand_name}, ensure_ascii=False)
             yield item
 
@@ -182,6 +182,6 @@ class CarSpider(scrapy.Spider):
         if specs:
             item["specs"] = json.dumps(specs, ensure_ascii=False)
         if car_images:
-            item["image"] = Asset(car_images[0], type="file")
+            item["image"] = Asset(car_images[0], typ="blob")
             item["images"] = json.dumps(car_images[:5], ensure_ascii=False)
         yield item

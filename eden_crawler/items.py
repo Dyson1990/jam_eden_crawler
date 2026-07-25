@@ -2,14 +2,14 @@ import scrapy
 
 
 class Asset:
-    """Mark a URL for download. type: 'file' → local path, 'blob' → binary in DB."""
-    def __init__(self, url, type="blob", referer=None):
+    """Mark a URL for download. typ: 'file' → local path, 'blob' → binary in DB."""
+    def __init__(self, url, typ="blob", referer=None):
         self.url = url
-        self.type = type
+        self.typ = typ
         self.referer = referer
 
     def __repr__(self):
-        return f"Asset(url={self.url!r}, type={self.type!r})"
+        return f"Asset(url={self.url!r}, typ={self.typ!r})"
 
 
 class DynamicItem(scrapy.Item):
