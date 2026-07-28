@@ -4,7 +4,8 @@ from eden_crawler.items import DynamicItem
 
 
 class IpCheckSpider(scrapy.Spider):
-    name = "ip_check"
+    name = "ip_test"
+    custom_settings = {"ITEM_PIPELINES": {}}
 
     async def start(self):
         yield scrapy.Request("http://ip-api.com/json", callback=self.parse)
