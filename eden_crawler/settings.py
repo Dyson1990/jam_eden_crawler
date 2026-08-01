@@ -13,26 +13,18 @@ ITEM_PIPELINES = {
     "eden_crawler.pipelines.SQLitePipeline": 300,
 }
 
-PROXY_ENABLED = True
-PROXY_URL = "http://127.0.0.1:10808"
+# Local proxy port. None to disable.
+# PROXY_PORT = 10808
+PROXY_PORT = None
 
-# None → hyper-h2, "scrapy" → default, "httpx" → httpx, "curl_cffi" → curl_cffi
+# None → hyper-h2, "httpx" → httpx, "curl_cffi" → curl_cffi, "playwright" → playwright
+# Per-spider override: set custom_settings = {"HTTP_BACKEND": "playwright"} in your spider
 HTTP_BACKEND = None
 
-if HTTP_BACKEND == "httpx":
-    DOWNLOAD_HANDLERS = {
-        "http": "eden_crawler.myhandlers.httpx.HttpxDownloadHandler",
-        "https": "eden_crawler.myhandlers.httpx.HttpxDownloadHandler",
-    }
-elif HTTP_BACKEND == "curl_cffi":
-    DOWNLOAD_HANDLERS = {
-        "http": "eden_crawler.myhandlers.curl_cffi.CurlCffiDownloadHandler",
-        "https": "eden_crawler.myhandlers.curl_cffi.CurlCffiDownloadHandler",
-    }
-elif HTTP_BACKEND is None:
-    DOWNLOAD_HANDLERS = {
-        "https": "eden_crawler.myhandlers.http2.H2DownloadHandler",
-    }
+DOWNLOAD_HANDLERS = {
+    "http": "eden_crawler.myhandlers.router.RouterDownloadHandler",
+    "https": "eden_crawler.myhandlers.router.RouterDownloadHandler",
+}
 
 LOG_LEVEL = "INFO"
 

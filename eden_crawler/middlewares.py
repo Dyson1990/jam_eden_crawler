@@ -32,5 +32,6 @@ class ProxyMiddleware:
         return cls(crawler.settings)
 
     def process_request(self, request):
-        if self.settings.getbool("PROXY_ENABLED"):
-            request.meta["proxy"] = self.settings.get("PROXY_URL")
+        port = self.settings.get("PROXY_PORT")
+        if port is not None:
+            request.meta["proxy"] = f"http://127.0.0.1:{port}"
