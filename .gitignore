@@ -9,6 +9,11 @@ __pycache__/
 dist/
 build/
 
+# Spiders
+eden_crawler/spiders/*
+!eden_crawler/spiders/__init__.py
+!eden_crawler/spiders/ip.py
+
 # Scrapy
 .scrapy/
 

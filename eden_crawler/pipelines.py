@@ -25,32 +25,36 @@ class SQLitePipeline:
         self.conn = sqlite3.connect("data.db")
         self.cursor = self.conn.cursor()
         spider_file = spider.__class__.__module__.split(".")[-1]
-        self.table_name = f"spider_{spider_file}"
+        self._base_table = f"spider_{spider_file}"
         self._asset_dir = os.path.abspath(
             spider.settings.get("ASSET_DIR", "downloads"))
+
+    def _table_name(self, item):
+        tbl = item.get("_table")
+        return f"{self._base_table}_{tbl}" if tbl else self._base_table
 
     def close_spider(self):
         self.conn.close()
 
-    def _ensure_table(self, fields, blob_fields):
+    def _ensure_table(self, table, fields, blob_fields):
         col_types = []
         for f in fields:
             col_types.append(f"{f} BLOB" if f in blob_fields else f"{f} TEXT")
         column_defs = ["insert_time TEXT"] + col_types
         self.cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS {self.table_name} "
+            f"CREATE TABLE IF NOT EXISTS {table} "
             f"(id INTEGER PRIMARY KEY AUTOINCREMENT, {', '.join(column_defs)})"
         )
         self.conn.commit()
 
-    def _sync_columns(self, fields, blob_fields):
-        self.cursor.execute(f"PRAGMA table_info({self.table_name})")
+    def _sync_columns(self, table, fields, blob_fields):
+        self.cursor.execute(f"PRAGMA table_info({table})")
         existing = {row[1] for row in self.cursor.fetchall()}
         for f in fields:
             if f not in existing:
                 col_type = "BLOB" if f in blob_fields else "TEXT"
                 self.cursor.execute(
-                    f"ALTER TABLE {self.table_name} ADD COLUMN {f} {col_type}"
+                    f"ALTER TABLE {table} ADD COLUMN {f} {col_type}"
                 )
         self.conn.commit()
 
@@ -97,7 +101,7 @@ class SQLitePipeline:
             try:
                 response = result
                 if val.typ == "file":
-                    dir_path = os.path.join(self._asset_dir, self.table_name)
+                    dir_path = os.path.join(self._asset_dir, self._table_name(item))
                     os.makedirs(dir_path, exist_ok=True)
                     ct = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore")
                     ext = self._guess_ext(ct, val.url)
@@ -117,11 +121,11 @@ class SQLitePipeline:
     async def process_item(self, item):
         item = await self._download_assets(item)
 
-        fields = list(item.fields.keys())
-        # Fields whose value is bytes → BLOB column
+        table = self._table_name(item)
+        fields = [f for f in item.fields.keys() if f != "_table"]
         blob_fields = {f for f in fields if isinstance(item.get(f), bytes)}
-        self._ensure_table(fields, blob_fields)
-        self._sync_columns(fields, blob_fields)
+        self._ensure_table(table, fields, blob_fields)
+        self._sync_columns(table, fields, blob_fields)
 
         values = [datetime.now().isoformat()]
         for f in fields:
@@ -134,7 +138,7 @@ class SQLitePipeline:
                 values.append(v)
         placeholders = ", ".join(["?"] * (len(fields) + 1))
         self.cursor.execute(
-            f"INSERT INTO {self.table_name} (insert_time, {', '.join(fields)}) VALUES ({placeholders})",
+            f"INSERT INTO {table} (insert_time, {', '.join(fields)}) VALUES ({placeholders})",
             values,
         )
         self.conn.commit()
