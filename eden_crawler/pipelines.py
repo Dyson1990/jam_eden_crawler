@@ -1,14 +1,24 @@
 import asyncio
 import hashlib
-import logging
 import os
-import sqlite3
 from datetime import datetime
 from urllib.parse import urlparse
 
 import scrapy
+from sqlalchemy import (
+    Column,
+    Integer,
+    LargeBinary,
+    MetaData,
+    Table,
+    Text,
+    create_engine,
+    inspect,
+    text,
+)
 
 from eden_crawler.items import Asset
+from eden_crawler.log import setup_logging
 
 
 class SQLitePipeline:
@@ -20,45 +30,68 @@ class SQLitePipeline:
 
     def open_spider(self):
         spider = self._crawler.spider
-        if spider.settings.getbool("LOG_QUIET", False):
-            logging.getLogger("scrapy").setLevel(logging.WARNING)
-        self.conn = sqlite3.connect("data.db")
-        self.cursor = self.conn.cursor()
+        setup_logging(spider)
+        self._log = spider.logger
+
+        self._engine = create_engine(f"sqlite:///{os.path.abspath('data.db')}")
+        self._metadata = MetaData()
+
         spider_file = spider.__class__.__module__.split(".")[-1]
         self._base_table = f"spider_{spider_file}"
         self._asset_dir = os.path.abspath(
             spider.settings.get("ASSET_DIR", "downloads"))
 
+    def close_spider(self):
+        self._engine.dispose()
+
+    # -- Table helpers --
+
     def _table_name(self, item):
-        tbl = item.get("_table")
+        tbl = item.get("_dbt")
         return f"{self._base_table}_{tbl}" if tbl else self._base_table
 
-    def close_spider(self):
-        self.conn.close()
+    def _get_table(self, table_name):
+        """Return Table object, reflecting from DB if needed."""
+        tbl = self._metadata.tables.get(table_name)
+        if tbl is not None:
+            return tbl
+        return Table(table_name, self._metadata, autoload_with=self._engine)
 
-    def _ensure_table(self, table, fields, blob_fields):
-        col_types = []
+    def _ensure_table(self, table_name, fields, blob_fields):
+        """Create table if not exists."""
+        if inspect(self._engine).has_table(table_name):
+            return
+        cols = [
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("insert_time", Text),
+        ]
         for f in fields:
-            col_types.append(f"{f} BLOB" if f in blob_fields else f"{f} TEXT")
-        column_defs = ["insert_time TEXT"] + col_types
-        self.cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS {table} "
-            f"(id INTEGER PRIMARY KEY AUTOINCREMENT, {', '.join(column_defs)})"
-        )
-        self.conn.commit()
+            cols.append(
+                Column(f, LargeBinary if f in blob_fields else Text))
+        Table(table_name, self._metadata, *cols)
+        self._metadata.create_all(self._engine)
 
-    def _sync_columns(self, table, fields, blob_fields):
-        self.cursor.execute(f"PRAGMA table_info({table})")
-        existing = {row[1] for row in self.cursor.fetchall()}
-        for f in fields:
-            if f not in existing:
-                col_type = "BLOB" if f in blob_fields else "TEXT"
-                self.cursor.execute(
-                    f"ALTER TABLE {table} ADD COLUMN {f} {col_type}"
-                )
-        self.conn.commit()
+    def _sync_columns(self, table_name, fields, blob_fields):
+        """Add missing columns to existing table."""
+        insp = inspect(self._engine)
+        existing = {c["name"] for c in insp.get_columns(table_name)}
+        added = False
+        with self._engine.connect() as conn:
+            for f in fields:
+                if f not in existing:
+                    col_type = "BLOB" if f in blob_fields else "TEXT"
+                    conn.execute(text(
+                        f"ALTER TABLE {table_name} ADD COLUMN {f} {col_type}"))
+                    added = True
+            if added:
+                conn.commit()
+        return added
 
-    def _guess_ext(self, content_type, url):
+
+    # -- Download helpers --
+
+    @staticmethod
+    def _guess_ext(content_type, url):
         ct = (content_type or "").lower()
         for prefix, ext in [
             ("image/jpeg", ".jpg"), ("image/jpg", ".jpg"),
@@ -72,7 +105,7 @@ class SQLitePipeline:
         return ext or ""
 
     async def _download_assets(self, item):
-        """Download all Asset values via Scrapy's downloader, replace in-place."""
+        """Download Asset values via Scrapy downloader, replace in-place."""
         keys, assets, tasks = [], [], []
 
         for key in list(item.keys()):
@@ -85,8 +118,8 @@ class SQLitePipeline:
             if url.startswith("//"):
                 url = "https:" + url
             headers = {"Referer": val.referer} if val.referer else None
-            request = scrapy.Request(url, method="GET", headers=headers,
-                                     dont_filter=True)
+            request = scrapy.Request(
+                url, method="GET", headers=headers, dont_filter=True)
             tasks.append(self._crawler.engine.download_async(request))
 
         if not tasks:
@@ -101,19 +134,21 @@ class SQLitePipeline:
             try:
                 response = result
                 if val.typ == "file":
-                    dir_path = os.path.join(self._asset_dir, self._table_name(item))
+                    dir_path = os.path.join(
+                        self._asset_dir, self._table_name(item))
                     os.makedirs(dir_path, exist_ok=True)
-                    ct = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore")
+                    ct = response.headers.get(
+                        "Content-Type", b"").decode("utf-8", errors="ignore")
                     ext = self._guess_ext(ct, val.url)
                     fname = hashlib.md5(val.url.encode()).hexdigest() + ext
                     filepath = os.path.abspath(os.path.join(dir_path, fname))
                     if not os.path.exists(filepath):
-                        with open(filepath, "wb") as f:
+                        with open(filepath, "wb") as f:  # noqa: ASYNC230
                             f.write(response.body)
                     item[key] = filepath
                 else:
                     item[key] = response.body
-            except Exception:
+            except Exception:  # noqa: BLE001
                 item[key] = None
 
         return item
@@ -122,24 +157,24 @@ class SQLitePipeline:
         item = await self._download_assets(item)
 
         table = self._table_name(item)
-        fields = [f for f in item.fields.keys() if f != "_table"]
+        fields = [f for f in item.fields
+                  if f != "_dbt"]
         blob_fields = {f for f in fields if isinstance(item.get(f), bytes)}
+
         self._ensure_table(table, fields, blob_fields)
         self._sync_columns(table, fields, blob_fields)
 
-        values = [datetime.now().isoformat()]
+        values = {"insert_time": datetime.now().isoformat()}  # noqa: DTZ005
         for f in fields:
             v = item.get(f)
             if f == "timestamp" and not v:
-                values.append(datetime.now().isoformat())
-            elif isinstance(v, bytes):
-                values.append(sqlite3.Binary(v))
+                values[f] = datetime.now().isoformat()  # noqa: DTZ005
             else:
-                values.append(v)
-        placeholders = ", ".join(["?"] * (len(fields) + 1))
-        self.cursor.execute(
-            f"INSERT INTO {table} (insert_time, {', '.join(fields)}) VALUES ({placeholders})",
-            values,
-        )
-        self.conn.commit()
+                values[f] = v
+
+        tbl = self._get_table(table)
+        with self._engine.connect() as conn:
+            conn.execute(tbl.insert().values(**values))
+            conn.commit()
+
         return item

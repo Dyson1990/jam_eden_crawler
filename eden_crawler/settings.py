@@ -5,20 +5,20 @@ ROBOTSTXT_OBEY = False
 
 DOWNLOADER_MIDDLEWARES = {
     "scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware": None,
-    "eden_crawler.middlewares.SafeHttpCompressionMiddleware": 810,
+    "eden_crawler.middlewares.UserAgentMiddleware": 50,
     "eden_crawler.middlewares.ProxyMiddleware": 100,
+    "eden_crawler.middlewares.Non200Middleware": 200,
+    "eden_crawler.middlewares.SafeHttpCompressionMiddleware": 810,
 }
 
 ITEM_PIPELINES = {
     "eden_crawler.pipelines.SQLitePipeline": 300,
 }
 
-# Local proxy port. None to disable.
-# PROXY_PORT = 10808
+# Local proxy. None=disabled, "clash"/"v2ray"=auto-detect, int=port
 PROXY_PORT = None
 
 # None → hyper-h2, "httpx" → httpx, "curl_cffi" → curl_cffi, "playwright" → playwright
-# Per-spider override: set custom_settings = {"HTTP_BACKEND": "playwright"} in your spider
 HTTP_BACKEND = None
 
 DOWNLOAD_HANDLERS = {
@@ -28,7 +28,8 @@ DOWNLOAD_HANDLERS = {
 
 LOG_LEVEL = "INFO"
 
-# Set True to suppress Scrapy's verbose telemetry/engine output
-LOG_QUIET = False
+# When True, save non-200 response bodies to logs/ for debugging
+DEV_MODE = True
 
+DOWNLOAD_DELAY = 1
 ASSET_DIR = "downloads"

@@ -18,6 +18,7 @@ eden_crawler/spiders/*
 .scrapy/
 
 # Logs
+logs/
 *.log
 
 # IDE
