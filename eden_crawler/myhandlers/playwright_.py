@@ -10,6 +10,9 @@ class PlaywrightDownloadHandler:
 
     def __init__(self, settings):
         self._timeout = settings.getfloat("DOWNLOAD_TIMEOUT", 30)
+        # "chrome" / "chromium" / "msedge" → use system browser via channel
+        # None → use Playwright's bundled chromium
+        self._channel = settings.get("PLAYWRIGHT_CHANNEL")
 
     @classmethod
     def from_crawler(cls, crawler):
@@ -30,7 +33,10 @@ class PlaywrightDownloadHandler:
         headers = {k.decode(): v[0].decode() for k, v in request.headers.items()}
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            launch_opts = {"headless": True}
+            if self._channel:
+                launch_opts["channel"] = self._channel
+            browser = p.chromium.launch(**launch_opts)
             ctx_opts = {}
             if proxy:
                 ctx_opts["proxy"] = {"server": proxy}

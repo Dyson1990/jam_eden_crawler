@@ -78,23 +78,26 @@ class Non200Middleware:
 
     def __init__(self, dev_mode):
         self._dev_mode = dev_mode
+        self._spider = None
 
     @classmethod
     def from_crawler(cls, crawler):
-        return cls(crawler.settings.getbool("DEV_MODE", False))
+        o = cls(crawler.settings.getbool("DEV_MODE", False))
+        o._spider = crawler.spider
+        return o
 
-    def process_response(self, request, response, spider):
+    def process_response(self, request, response):
         if response.status != 200:
-            spider.logger.error("Non-200: %s → %s", request.url, response.status)
+            self._spider.logger.error("Non-200: %s → %s", request.url, response.status)
 
         if self._dev_mode or response.status != 200:
             from eden_crawler.log import save_body
-            save_body(spider.name, request.url, response.body)
+            save_body(self._spider.name, request.url, response.body)
 
         return response
 
-    def process_exception(self, request, exception, spider):
-        spider.logger.error("Request failed: %s → %s", request.url, exception)
+    def process_exception(self, request, exception):
+        self._spider.logger.error("Request failed: %s → %s", request.url, exception)
 
 
 class UserAgentMiddleware:

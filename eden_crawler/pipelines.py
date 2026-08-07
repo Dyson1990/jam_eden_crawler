@@ -104,6 +104,25 @@ class SQLitePipeline:
         _, ext = os.path.splitext(urlparse(url).path)
         return ext or ""
 
+    @staticmethod
+    def _extract_fname(url):
+        """Extract filename from URL path, fallback to md5 hash."""
+        path = urlparse(url).path
+        fname = os.path.basename(path)
+        if fname and "." in fname:
+            return fname
+        return None
+
+    def _resolve_path(self, dir_path, fname):
+        """Resolve file path. If fname exists, insert timestamp before ext."""
+        filepath = os.path.abspath(os.path.join(dir_path, fname))
+        if os.path.exists(filepath):
+            base, ext = os.path.splitext(fname)
+            ts = datetime.now().strftime("%Y%m%d%H%M%S")  # noqa: DTZ005
+            filepath = os.path.abspath(
+                os.path.join(dir_path, f"{base}_{ts}{ext}"))
+        return filepath
+
     async def _download_assets(self, item):
         """Download Asset values via Scrapy downloader, replace in-place."""
         keys, assets, tasks = [], [], []
@@ -125,10 +144,16 @@ class SQLitePipeline:
         if not tasks:
             return item
 
+        total = len(tasks)
+        self._log.debug("downloading %d asset(s)", total)
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for key, val, result in zip(keys, assets, results):
+        for i, (key, val, result) in enumerate(
+            zip(keys, assets, results), 1
+        ):
             if isinstance(result, Exception):
+                self._log.debug("[%d/%d] FAIL %s", i, total, val.url)
                 item[key] = None
                 continue
             try:
@@ -140,15 +165,32 @@ class SQLitePipeline:
                     ct = response.headers.get(
                         "Content-Type", b"").decode("utf-8", errors="ignore")
                     ext = self._guess_ext(ct, val.url)
-                    fname = hashlib.md5(val.url.encode()).hexdigest() + ext
-                    filepath = os.path.abspath(os.path.join(dir_path, fname))
-                    if not os.path.exists(filepath):
-                        with open(filepath, "wb") as f:  # noqa: ASYNC230
-                            f.write(response.body)
+
+                    # Determine filename: fn > URL basename > md5 hash
+                    if val.fn:
+                        fname = val.fn
+                    else:
+                        fname = self._extract_fname(val.url)
+                        if fname is None:
+                            fname = hashlib.md5(
+                                val.url.encode()).hexdigest()[:8] + ext
+                        elif not fname.endswith(ext):
+                            fname = (
+                                os.path.splitext(fname)[0] + ext
+                                if ext else fname)
+
+                    filepath = self._resolve_path(dir_path, fname)
+                    with open(filepath, "wb") as f:  # noqa: ASYNC230
+                        f.write(response.body)
                     item[key] = filepath
+                    self._log.debug("[%d/%d] %s → %s", i, total,
+                                    os.path.basename(filepath))
                 else:
                     item[key] = response.body
+                    self._log.debug("[%d/%d] %s → blob(%d B)", i, total,
+                                    val.url, len(response.body))
             except Exception:  # noqa: BLE001
+                self._log.debug("[%d/%d] FAIL %s", i, total, val.url)
                 item[key] = None
 
         return item
