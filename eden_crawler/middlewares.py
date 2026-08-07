@@ -108,6 +108,6 @@ class UserAgentMiddleware:
     def from_crawler(cls, crawler):
         return cls()
 
-    def process_request(self, request, spider):
+    def process_request(self, request):
         if "User-Agent" not in request.headers:
             request.headers["User-Agent"] = self._ua.random

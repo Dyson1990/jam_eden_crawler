@@ -3,8 +3,8 @@ import socket
 import ssl
 from urllib.parse import urlparse
 
-import h2.connection
 import h2.config
+import h2.connection
 import h2.events
 from scrapy.http import HtmlResponse
 
@@ -84,32 +84,49 @@ class H2DownloadHandler:
         resp_data = bytearray()
         resp_status = 0
 
-        while True:
-            data = sock.recv(65535)
-            if not data:
-                break
-            for event in conn.receive_data(data):
-                if isinstance(event, h2.events.ResponseReceived):
-                    resp_headers = {h.decode(): v.decode() for h, v in event.headers}
-                    resp_status = int(resp_headers.get(":status", 0))
-                elif isinstance(event, h2.events.DataReceived):
-                    resp_data.extend(event.data)
-                    conn.acknowledge_received_data(
-                        event.flow_controlled_length, event.stream_id
-                    )
-                elif isinstance(event, h2.events.StreamEnded):
-                    sock.sendall(conn.data_to_send())
-                    conn.close_connection()
-                    sock.sendall(conn.data_to_send())
-                    sock.close()
-                    return HtmlResponse(
-                        url=request.url,
-                        status=resp_status,
-                        headers=resp_headers,
-                        body=bytes(resp_data),
-                        request=request,
-                    )
-            sock.sendall(conn.data_to_send())
+        try:
+            while True:
+                data = sock.recv(65535)
+                if not data:
+                    break
+                for event in conn.receive_data(data):
+                    if isinstance(event, h2.events.ResponseReceived):
+                        resp_headers = {h.decode(): v.decode() for h, v in event.headers}
+                        resp_status = int(resp_headers.get(":status", 0))
+                    elif isinstance(event, h2.events.DataReceived):
+                        resp_data.extend(event.data)
+                        conn.acknowledge_received_data(
+                            event.flow_controlled_length, event.stream_id
+                        )
+                    elif isinstance(event, h2.events.StreamEnded):
+                        sock.sendall(conn.data_to_send())
+                        conn.close_connection()
+                        sock.sendall(conn.data_to_send())
+                        sock.close()
+                        return HtmlResponse(
+                            url=request.url,
+                            status=resp_status,
+                            headers=resp_headers,
+                            body=bytes(resp_data),
+                            request=request,
+                        )
+                sock.sendall(conn.data_to_send())
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+        # Server closed connection without completing HTTP/2 stream
+        if resp_status:
+            return HtmlResponse(
+                url=request.url,
+                status=resp_status,
+                headers=resp_headers,
+                body=bytes(resp_data),
+                request=request,
+            )
+        raise ConnectionError(f"H2 server closed connection before response: {request.url}")
 
     async def close(self):
         pass
